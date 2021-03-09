@@ -1,0 +1,70 @@
+#!/usr/bin/env python
+
+import os
+import requests
+import sys
+
+class AnsibleRunPipeline:
+    def __init__(self, branch, github, azp):
+        self.branch = branch
+        self.github = github
+        self.azp = azp
+
+    def get_branch_head(self):
+        req = requests.get(
+            'https://api.github.com/repos/ansible/ansible/branches/{}'.format(
+                self.branch),
+            headers={
+                'Authorization': 'token {}'.format(self.github),
+            },
+        )
+        req.raise_for_status()
+        json_resp = req.json()
+        return json_resp.get('commit', {}).get('sha')
+
+    # Right now, hardcodes ansible/ansible and pipelineId=20
+    def run_pipeline(self, sha):
+        payload = {
+            'stagesToSkip': [],
+            'resources': {
+                'repositories': {
+                    'self': {
+                        'refName': 'refs/heads/{}'.format(self.branch),
+                        'version': sha,
+                    }
+                }
+            },
+            'variables': {}
+        }
+
+        req = requests.post(
+            'https://dev.azure.com/ansible/ansible/_apis/pipelines/'
+            '20/runs?api-version=6.0-preview.1',
+            json=payload,
+            auth=('ansible', self.azp),
+        )
+        req.raise_for_status()
+        return req.json()
+
+if __name__ == '__main__':
+    github = os.environ.get('GITHUB_TOKEN')
+    azp = os.environ.get('ANSIBLE_AZP_PAT')
+
+    if not github or not azp:
+        print('Env vars GITHUB_TOKEN and ANSIBLE_AZP_PAT must be defined')
+        sys.exit(1)
+
+    if len(sys.argv) < 2:
+        print('Must specify branch as an argument')
+        sys.exit(1)
+
+    branch = sys.argv[1]
+    client = AnsibleRunPipeline(branch, github, azp)
+    branch_head = client.get_branch_head()
+    if not branch_head:
+        print('Failed to determine branch head for {}'.format(branch))
+        sys.exit(1)
+    run = client.run_pipeline(branch_head)
+    print(run['state'])
+    print('Pipeline URL: {}'.format(run['_links']['pipeline.web']['href']))
+    print('Run URL: {}'.format(run['_links']['web']['href']))
